@@ -193,6 +193,71 @@ describe("materializeProfile", () => {
     expect(config.customKey).toEqual({ any: "thing" });
   });
 
+  it("always mirrors source extensions on re-materialization, even if the profile has its own", () => {
+    fs.writeFileSync(
+      path.join(agentDir, "config.yml"),
+      "theme: dark\nextensions:\n  - ext-a\n  - ext-b\n"
+    );
+    const dir = mat.materializeProfile("work", baseProfile);
+    const profileConfig = path.join(dir, "config.yml");
+    const existing = parseYaml(fs.readFileSync(profileConfig, "utf-8")) as Record<string, unknown>;
+    // Simulate omp persisting a stale extension list during a session
+    existing.extensions = ["ext-a"];
+    fs.writeFileSync(profileConfig, stringifyYaml(existing));
+
+    // User enables ext-c under the default config — it must reach the profile
+    fs.writeFileSync(
+      path.join(agentDir, "config.yml"),
+      "theme: light\nextensions:\n  - ext-a\n  - ext-b\n  - ext-c\n"
+    );
+    mat.materializeProfile("work", baseProfile);
+    const config = readProfileConfig(dir);
+    expect(config.extensions).toEqual(["ext-a", "ext-b", "ext-c"]);
+    // Other keys still follow the "profile wins" rule
+    expect(config.theme).toBe("dark");
+  });
+
+  it("does not wipe profile extensions when the source config has no extensions key", () => {
+    fs.writeFileSync(path.join(agentDir, "config.yml"), "theme: dark\n");
+    const dir = mat.materializeProfile("work", baseProfile);
+    const profileConfig = path.join(dir, "config.yml");
+    const existing = parseYaml(fs.readFileSync(profileConfig, "utf-8")) as Record<string, unknown>;
+    existing.extensions = ["ext-a"];
+    fs.writeFileSync(profileConfig, stringifyYaml(existing));
+
+    mat.materializeProfile("work", baseProfile);
+    const config = readProfileConfig(dir);
+    expect(config.extensions).toEqual(["ext-a"]);
+  });
+
+  it("only checks first-level keys: a profile-owned object wins wholesale, no nested fill-in", () => {
+    fs.writeFileSync(
+      path.join(agentDir, "config.yml"),
+      "statusbar:\n  enabled: false\n  preset: full\n"
+    );
+    const dir = mat.materializeProfile("work", baseProfile);
+    const profileConfig = path.join(dir, "config.yml");
+    const existing = parseYaml(fs.readFileSync(profileConfig, "utf-8")) as Record<string, unknown>;
+    existing.statusbar = { enabled: true };
+    fs.writeFileSync(profileConfig, stringifyYaml(existing));
+
+    mat.materializeProfile("work", baseProfile);
+    const config = readProfileConfig(dir);
+    // The profile's first-level `statusbar` key exists, so it wins entirely —
+    // the missing nested `preset` key is NOT filled in from the source.
+    expect(config.statusbar).toEqual({ enabled: true });
+  });
+
+  it("lets profile.settings win over the mirrored source extensions", () => {
+    fs.writeFileSync(path.join(agentDir, "config.yml"), "extensions:\n  - ext-a\n");
+    const dir = mat.materializeProfile("work", {
+      ...baseProfile,
+      settings: { extensions: ["ext-custom"] },
+    });
+    const config = readProfileConfig(dir);
+    expect(config.extensions).toEqual(["ext-custom"]);
+  });
+
   it("lets profile.settings overrides win over preserved profile config", () => {
     const dir = mat.materializeProfile("work", {
       ...baseProfile,

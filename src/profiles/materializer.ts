@@ -70,11 +70,21 @@ export function resolveEffectiveProvider(profile: Profile, config: AgentConfigDa
  *
  * On re-materialization, every key already in the profile's own
  * config.yml is preserved (omp persists user state there at runtime),
- * rather than being reset from the source. This makes the profile file the
- * source of truth for anything omp or the user wrote into it.
+ * rather than being reset from the source — EXCEPT `extensions`, which
+ * is always mirrored from the source config: extension state lives in
+ * the shared extensions/ dir (symlinked), so a profile's stale copy
+ * would otherwise shadow enable/disable changes made under the default
+ * config. Other source settings only fill in keys the profile is missing.
  */
 export function writeConfigFile(dir: string, profile: Profile): void {
   const settings = readSourceConfig();
+
+  // Extensions are shared state (the extensions/ dir is symlinked into every
+  // profile), so the source config's list is authoritative: capture it before
+  // the existing-profile overlay below, which must not let a stale per-profile
+  // copy win. Skipped when the source doesn't define it at all (e.g. the
+  // source file is missing), so we never wipe the profile's list blindly.
+  const sourceExtensions = settings.extensions;
 
   // Profile-scoped keys: never inherit the source agent config's values.
   // omp persists the user's last provider/model/thinking selection into the
@@ -87,13 +97,18 @@ export function writeConfigFile(dir: string, profile: Profile): void {
   delete settings.defaultThinkingLevel;
 
   // Keep everything omp (or the user) wrote into the profile's config.yml
-  // during previous sessions.
+  // during previous sessions. `extensions` is the exception: when the source
+  // defines it, it always wins (synced below) instead of the stale copy.
+  // All comparisons here are shallow — only first-level keys are considered;
+  // a profile-owned top-level key wins wholesale and nested keys are never
+  // merged or filled in from the source.
   const profileConfigFile = path.join(dir, "config.yml");
   if (fs.existsSync(profileConfigFile)) {
     try {
       const existing = readYaml<AgentConfigData>(profileConfigFile);
       if (existing && typeof existing === "object") {
         for (const [key, value] of Object.entries(existing)) {
+          if (key === "extensions" && sourceExtensions !== undefined) continue;
           settings[key] = value;
         }
         logger.debug(`writeConfigFile: preserved existing keys from ${profileConfigFile}`);
@@ -101,6 +116,13 @@ export function writeConfigFile(dir: string, profile: Profile): void {
     } catch (err) {
       logger.warn(`writeConfigFile: could not read existing ${profileConfigFile}, regenerating`, err);
     }
+  }
+
+  // Always mirror the source's extension list, even if the profile's
+  // config.yml already has one — extension toggles made under the default
+  // config must propagate to already-materialized profiles.
+  if (sourceExtensions !== undefined) {
+    settings.extensions = sourceExtensions;
   }
 
   if (profile.settings) {
