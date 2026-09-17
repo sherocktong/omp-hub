@@ -1,6 +1,6 @@
 {
   "name": "omp-hub-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Manage omp (oh-my-pi) coding agent profiles (provider, model, token, base URL)",
   "type": "module",
   "bin": {
